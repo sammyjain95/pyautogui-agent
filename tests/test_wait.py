@@ -4,7 +4,10 @@ import os
 
 import pytest
 
-from pyautogui_agent.errors import ActionTimeoutError
+from pyautogui_agent.errors import (
+    ActionTimeoutError,
+    ProviderNotInstalledError,
+)
 from pyautogui_agent.wait import wait_for_condition, wait_for_image
 
 
@@ -62,10 +65,43 @@ def test_wait_for_image_treats_not_found_exception_as_miss(fake_pyautogui, tmp_p
                        screenshot_dir=str(tmp_path))
 
 
-def test_wait_for_image_passes_confidence_and_region(fake_pyautogui):
+def test_wait_for_image_passes_confidence_and_region(
+        fake_pyautogui, monkeypatch):
+    # Confidence is only passed through when OpenCV is available.
+    monkeypatch.setattr("pyautogui_agent.wait.opencv_available",
+                        lambda: True)
     fake_pyautogui.locate_result = (0, 0, 5, 5)
     wait_for_image("ok.png", timeout=5.0, confidence=0.9,
                    region=(0, 0, 100, 100))
     _, _, kwargs = fake_pyautogui.calls[-1]
     assert kwargs["confidence"] == 0.9
     assert kwargs["region"] == (0, 0, 100, 100)
+
+
+def test_wait_for_image_confidence_without_opencv_raises_clear_error(
+        fake_pyautogui, monkeypatch):
+    # No OpenCV: confidence must raise ProviderNotInstalledError with
+    # install instructions, never PyScreeze's raw NotImplementedError,
+    # and locateOnScreen must not be called at all.
+    monkeypatch.setattr("pyautogui_agent.wait.opencv_available",
+                        lambda: False)
+    with pytest.raises(ProviderNotInstalledError) as excinfo:
+        wait_for_image("ok.png", timeout=5.0, confidence=0.9)
+    assert "OpenCV" in str(excinfo.value)
+    assert "opencv-python" in str(excinfo.value)
+    assert [c for c in fake_pyautogui.calls
+            if c[0] == "locateOnScreen"] == []
+
+
+def test_wait_for_image_converts_not_implemented_error(
+        fake_pyautogui, monkeypatch):
+    # Belt and braces: even when the availability check is bypassed
+    # and locateOnScreen raises NotImplementedError itself, the caller
+    # gets ProviderNotInstalledError, not the raw error.
+    monkeypatch.setattr("pyautogui_agent.wait.opencv_available",
+                        lambda: True)
+    fake_pyautogui.locate_raises = NotImplementedError(
+        "confidence needs OpenCV")
+    with pytest.raises(ProviderNotInstalledError) as excinfo:
+        wait_for_image("ok.png", timeout=5.0, confidence=0.9)
+    assert "OpenCV" in str(excinfo.value)

@@ -22,8 +22,14 @@ Optional extras:
 ```bash
 pip install "pyautogui-agent[ocr]"    # OCR text clicking (pytesseract)
 pip install "pyautogui-agent[macos]"   # macOS element listing (pyobjc)
+pip install "pyautogui-agent[windows]" # Windows element listing (comtypes)
 pip install "pyautogui-agent[dev]"     # running the tests (pytest)
 ```
+
+Linux element listing needs pyatspi, which is not on PyPI:
+`sudo apt install python3-pyatspi at-spi2-core`. It also needs a
+D-Bus session bus (a logged-in GUI session, or `dbus-run-session`
+under Xvfb).
 
 OCR also needs the Tesseract binary itself: `brew install tesseract`
 on macOS, `sudo apt install tesseract-ocr` on Ubuntu/Debian. Without
@@ -56,7 +62,9 @@ destructive.
 
 | Module | What it does |
 | --- | --- |
-| `elements.py` | `list_elements()`, `find_element()`, `find_all()`, `click_element()`. macOS Accessibility tree first; other platforms return an explicit "not supported yet" result. |
+| `elements.py` | `list_elements()`, `find_element()`, `find_all()`, `click_element()`. Dispatches by platform: macOS Accessibility, Linux AT-SPI, Windows UI Automation. Each returns the same `ElementListing` shape; a missing provider dependency returns an explicit "not supported" result. |
+| `elements_linux.py` | Linux AT-SPI provider (pyatspi). Verified live under Xvfb. |
+| `elements_windows.py` | Windows UI Automation provider (comtypes). Implemented from spec, UNVERIFIED. |
 | `observe.py` | `observe()`: one call returning screenshot, screen size, mouse position, and the element list. |
 | `wait.py` | `wait_for_image()`, `wait_for_condition()`: poll with a deadline; the timeout error carries the last screenshot path. |
 | `actions.py` | `click_text()` (OCR), `fill_field()`, `click_image()`, `click_point()`. Task-level actions, all through the safety layer. |
@@ -82,26 +90,39 @@ destructive.
 
 ## Verification status (honest)
 
-Verified on this Linux VM, no display, with mocks (see `tests/`):
+Verified live on this Linux VM under Xvfb (see `TESTING.md` for the
+full report):
 
-- Imports, unit tests, and a dry-run end-to-end pass all pass here.
-- Waits (including timeout with a saved screenshot), structured
-  errors, dry-run mode, the action log, the confirmation hook, and
-  the `observe()` structure are covered by tests.
-- `click_text` raises the clear Tesseract install error when Tesseract
-  is absent (verified: this VM has no Tesseract).
-- `list_elements()` on Linux returns the explicit "not supported yet"
-  result, never a silent empty list (verified).
+- 66 unit tests pass, including provider dispatch, a fake AT-SPI
+  tree, the Windows import guard, the confidence rule, the
+  fill_field field-point computation, and the OCR psm 11 plus 2x
+  upscale.
+- 9 of 9 live checks pass with the real scrot screenshot path:
+  observe, locate, wait_for_image, click_image, dry-run, wait
+  timeout with a saved screenshot, OCR click_text, fill_field
+  ("Name:", "Hello" typed into the field to the right of the
+  label), and wait_for_condition.
+- Linux AT-SPI element listing is verified live with a GTK dialog:
+  tree, roles, names, sizes, and positions are correct, and a click
+  on the listed OK button dismissed the dialog.
+  `fill_field` clicks the field to the right of the label (30px gap
+  by default), falling back to below the label when there is no room
+  to the right. The accessibility path (macOS) clicks the real
+  field element.
+- Passing `confidence` to `wait_for_image` without OpenCV raises
+  `ProviderNotInstalledError("OpenCV", ...)` with the install hint,
+  instead of a raw NotImplementedError.
 
-NOT verified here, needs the owner's Mac:
+NOT verified here, needs the owner's Mac or a Windows machine:
 
 - The macOS element listing (Accessibility API, Retina scaling) is
-  implemented from the API specification and marked UNVERIFIED in the
-  code. It has never run on a Mac.
-- OCR clicking against a real screen has never run.
-- Live `observe()` against a real screen has never run.
+  implemented from the API specification and marked UNVERIFIED in
+  the code. It has never run on a Mac.
+- The Windows UI Automation provider is implemented from the API
+  specification and marked UNVERIFIED in the code. It has never run
+  on Windows.
 
-Verify on the Mac with `scripts/mac_live_test.py`. It prints the
+Verify macOS with `scripts/mac_live_test.py`. It prints the
 element list, one `observe()` call, and a dry-run action, and it
 never clicks anything real. Only after that run passes should V1 be
 called done.
@@ -112,8 +133,15 @@ called done.
   PyAutoGUI limit.
 - Image matching is slow (1 to 2 seconds per locate call) and breaks
   on scaling or theme changes. Prefer the element list or OCR text.
-- Element listing is macOS only in V1. Windows (UI Automation) and
-  Linux (AT-SPI) are defined to plug in later.
+  Without OpenCV, `confidence` is not available; install
+  `opencv-python` for fuzzy matching.
+- OCR text clicking upscales the screenshot 2x and uses Tesseract
+  psm 11, so each OCR pass takes about 2 seconds on a 1920x1080
+  screen.
+- Element listing has three providers: macOS (Accessibility),
+  Linux (AT-SPI, verified live), Windows (UI Automation,
+  unverified). The macOS provider lists the focused application
+  only; Linux lists the whole desktop.
 
 ## Relationship to upstream
 

@@ -9,6 +9,9 @@ them.
 Install: pip install pyautogui-agent
 OCR (optional): pip install "pyautogui-agent[ocr]" plus the Tesseract binary
 macOS element listing (optional): pip install "pyautogui-agent[macos]"
+Windows element listing (optional): pip install "pyautogui-agent[windows]"
+Linux element listing: sudo apt install python3-pyatspi at-spi2-core
+(pyatspi is not on PyPI, so there is no pip extra for it)
 
 Import: import pyautogui_agent
 All public names are available from pyautogui_agent directly, for
@@ -22,18 +25,41 @@ example: from pyautogui_agent import observe, click_text, Session.
   (ElementListing or None), timestamp. On platforms without an element
   provider the listing is included with supported=False, never omitted.
 
-## Elements (macOS only in V1)
+## Elements (three providers, one shape)
 
 - list_elements(max_depth=12, max_elements=500, scale=None)
   Returns ElementListing with fields: elements (list of Element),
   supported (bool), platform, message, scale (backing factor used),
-  app_name (focused application). On non-macOS platforms returns
-  supported=False with a message, never a silent empty list.
-- Element fields: role (for example "AXButton"), title, description,
-  position (x, y) in PyAutoGUI pixel coordinates, size (width,
-  height), center (x, y), enabled (bool), value.
+  app_name (focused application, macOS only). Dispatches by
+  platform to a provider; each returns the same ElementListing and
+  Element shape with the same depth and count limits. When a
+  provider's dependency is missing, the listing has supported=False
+  with a clear install message, never a crash and never a silent
+  empty list.
+- Providers:
+  - macOS: Accessibility API via pyobjc (scale is the display
+    backing factor, Retina 2.0). Lists the focused application
+    only. UNVERIFIED: implemented from the API specification, never
+    run on a Mac.
+  - Linux: AT-SPI via pyatspi (positions are already screen pixels,
+    so scale is accepted but ignored). Lists the whole desktop, all
+    applications. VERIFIED LIVE under Xvfb with a GTK dialog: tree,
+    roles, names, sizes, and positions all correct, and a click on
+    the listed OK button dismissed the dialog. Position detail:
+    getPosition(XY_SCREEN) returns (0, 0) for descendants, so the
+    provider takes a top-level window's screen position from
+    XY_SCREEN and computes each descendant as that plus its own
+    XY_WINDOW offset. Needs a D-Bus session bus; without one the
+    listing is unsupported (libatspi aborts the process if getDesktop
+    is called with no bus).
+  - Windows: UI Automation via comtypes. UNVERIFIED: implemented
+    from the API specification, cannot be tested on Linux.
+- Element fields: role (for example "AXButton" on macOS,
+  "push button" on Linux AT-SPI), title, description, position
+  (x, y) in PyAutoGUI pixel coordinates, size (width, height),
+  center (x, y), enabled (bool), value, visible (bool).
   Coordinates are Accessibility points scaled by the display backing
-  scale factor (Retina: 2.0). Pass scale= to override.
+  scale factor (Retina: 2.0) on macOS. Pass scale= to override.
 - find_element(role=None, title=None, title_contains=None,
   description=None, max_depth=12, max_elements=500, scale=None)
   Returns the first matching Element or None. Raises
@@ -48,6 +74,11 @@ example: from pyautogui_agent import observe, click_text, Session.
   region=None, screenshot_dir=None)
   Returns the box (left, top, width, height) when the image appears.
   Raises ActionTimeoutError carrying last_screenshot (path) and waited.
+  Confidence rule: when confidence is not None and OpenCV is not
+  installed, raises ProviderNotInstalledError("OpenCV", ...) with
+  the install hint (pip install opencv-python); without OpenCV only
+  exact matching is available. A raw NotImplementedError from
+  locateOnScreen is converted to the same error.
 - wait_for_condition(fn, timeout=10.0, interval=0.5,
   description="condition", screenshot_dir=None)
   Returns the truthy value fn() returns. Raises ActionTimeoutError
@@ -61,11 +92,25 @@ example: from pyautogui_agent import observe, click_text, Session.
   (x, y) center, or None in dry-run mode. Raises
   ElementNotFoundError (query, screenshot_path, closest_match,
   confidence) when the text never appears, and
-  ProviderNotInstalledError when Tesseract is absent.
-- fill_field(text, value, session=None, timeout=10.0, interval=0.05)
+  ProviderNotInstalledError when Tesseract is absent. OCR detail:
+  the screenshot is upscaled 2x and read with Tesseract psm 11
+  (sparse text), because the default page segmentation missed small
+  labels such as a 16pt "Name:" next to an entry field. Coordinates
+  are scaled back to screen pixels. Each OCR pass takes about 2
+  seconds on a 1920x1080 screen.
+- fill_field(text, value, session=None, timeout=10.0, interval=0.05,
+  field_gap=30)
   Clicks a field by its label (accessibility element first, then OCR
   text) and types the value. Raises ElementNotFoundError when the
-  label cannot be found.
+  label cannot be found. Field-point heuristic (OCR path): the
+  label's box is found, then the click lands on the FIELD, not the
+  label: the point to the right of the label on the same row,
+  (label_right + field_gap, label_center_y), with field_gap
+  defaulting to 30px. When the label spans nearly the full screen
+  width (no room to the right), the fallback is below the label,
+  (label_center_x, label_bottom + field_gap). The accessibility
+  path (macOS) clicks the real field element and does not use this
+  heuristic.
 - click_image(image, session=None, timeout=10.0, interval=0.5,
   confidence=None, region=None)
   Waits for an image, then clicks its center. Returns (x, y) or None
@@ -128,7 +173,12 @@ example: from pyautogui_agent import observe, click_text, Session.
 ## Verification status
 
 - Waits, errors, safety, dry-run, action log, and observe() structure
-  are unit tested with mocks, no display needed.
-- macOS element listing and OCR clicking are implemented from API
-  specifications and are UNVERIFIED on a real Mac. Verify with
-  scripts/mac_live_test.py on the owner's Mac before relying on them.
+  are unit tested with mocks, no display needed. 66 unit tests pass.
+- Linux AT-SPI element listing is verified live under Xvfb with a
+  GTK dialog (tree, roles, names, sizes, positions, and a real click
+  that dismissed the dialog). OCR clicking and fill_field are
+  verified live on this VM (9 of 9 live checks pass, real scrot
+  screenshot path). See TESTING.md.
+- macOS element listing and Windows UI Automation are implemented
+  from API specifications and are UNVERIFIED. Verify macOS with
+  scripts/mac_live_test.py on the owner's Mac before relying on it.

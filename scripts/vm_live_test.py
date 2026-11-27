@@ -11,12 +11,13 @@ pytesseract for the OCR steps (those steps report a clear skip/error
 when Tesseract is absent).
 
 NOTE on screenshots: on a bare Linux box PyScreeze needs scrot or
-gnome-screenshot. When neither is installed, this driver installs an
-``mss`` screenshot shim (X11, no scrot needed) and patches both
+gnome-screenshot. When scrot is present, the real PyScreeze path is
+used. When neither is installed, this driver installs an ``mss``
+screenshot shim (X11, no scrot needed) and patches both
 ``pyautogui.screenshot`` and ``pyscreeze.screenshot`` with it, so the
 package's own logic (observe, locate, click, waits) is tested against
-the real screen. The shim is reported in the output; it is a test
-harness choice, not part of the package.
+the real screen. The driver prints which path it used; the shim is a
+test harness choice, not part of the package.
 """
 import os
 import subprocess
@@ -61,6 +62,13 @@ def find_green_box(image):
 
 
 def main():
+    # PyScreeze 1.0.1 only recognises X11 from XDG_SESSION_TYPE=x11
+    # (it does not fall back to DISPLAY), and under xvfb-run that
+    # variable is unset, so PyScreeze would refuse to use scrot even
+    # though scrot is installed. Xvfb IS X11, so set it before
+    # importing pyautogui (PyScreeze reads it at import time).
+    # setdefault leaves a real Wayland session untouched.
+    os.environ.setdefault("XDG_SESSION_TYPE", "x11")
     import pyautogui_agent as agent
     from pyautogui_agent.safety import Session
 
@@ -79,33 +87,38 @@ def main():
         time.sleep(2.5)  # let the window draw
         pg = agent._util.get_pyautogui()
 
-        # Screenshot shim: use mss (X11) when PyScreeze has no backend.
-        # PyScreeze on Linux needs scrot or gnome-screenshot; patch both
-        # module attributes so observe() and locateOnScreen() use mss.
-        try:
-            import pyscreeze
-            import mss as mss_lib
-            from PIL import Image as _Image
+        # Screenshot path: prefer the real PyScreeze backend (scrot)
+        # when it exists; only fall back to the mss shim when it does
+        # not. Print which path is in use so the results say so.
+        import shutil
+        if shutil.which("scrot") is not None:
+            print("screenshot: real PyScreeze path (scrot found)")
+        else:
+            try:
+                import pyscreeze
+                import mss as mss_lib
+                from PIL import Image as _Image
 
-            def _mss_shot(imageFilename=None, region=None):
-                with mss_lib.MSS() as sct:
-                    mon = sct.monitors[1]
-                    if region is not None:
-                        mon = {"left": region[0], "top": region[1],
-                               "width": region[2], "height": region[3]}
-                    grab = sct.grab(mon)
-                    img = _Image.frombytes("RGB", grab.size, grab.bgra,
-                                           "raw", "BGRX")
-                    if imageFilename is not None:
-                        img.save(imageFilename)
-                    return img
+                def _mss_shot(imageFilename=None, region=None):
+                    with mss_lib.MSS() as sct:
+                        mon = sct.monitors[1]
+                        if region is not None:
+                            mon = {"left": region[0], "top": region[1],
+                                   "width": region[2],
+                                   "height": region[3]}
+                        grab = sct.grab(mon)
+                        img = _Image.frombytes("RGB", grab.size, grab.bgra,
+                                               "raw", "BGRX")
+                        if imageFilename is not None:
+                            img.save(imageFilename)
+                        return img
 
-            pyscreeze.screenshot = _mss_shot
-            pg.screenshot = _mss_shot
-            print("screenshot: mss shim installed (no scrot on this VM)")
-        except Exception as exc:
-            print(f"screenshot: mss shim NOT installed ({exc!r}); "
-                  "using PyScreeze default")
+                pyscreeze.screenshot = _mss_shot
+                pg.screenshot = _mss_shot
+                print("screenshot: mss shim installed (no scrot on this VM)")
+            except Exception as exc:
+                print(f"screenshot: mss shim NOT installed ({exc!r}); "
+                      "using PyScreeze default")
 
         # T1: observe()
         t0 = time.monotonic()

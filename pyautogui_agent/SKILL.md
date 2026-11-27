@@ -26,14 +26,21 @@ mode while testing a new task.
   Tesseract binary (`brew install tesseract` on macOS,
   `sudo apt install tesseract-ocr` on Ubuntu/Debian).
 - macOS element listing: `pip install "pyautogui-agent[macos]"`.
+- Windows element listing: `pip install "pyautogui-agent[windows]"`.
+- Linux element listing: `sudo apt install python3-pyatspi
+  at-spi2-core` (pyatspi is not on PyPI, so there is no pip extra).
+  Needs a D-Bus session bus (a logged-in GUI session, or
+  `dbus-run-session` under Xvfb).
 
 ## Core workflow
 
 1. Observe first. Call `observe()` and read the screen size, the
-   mouse position, and the element list. On macOS, `list_elements()`
-   gives buttons and fields with names and coordinates. On other
-   platforms the listing reports `supported=False`; an empty list
-   there means "no provider", not "no elements".
+   mouse position, and the element list. `list_elements()` works on
+   macOS (Accessibility, focused application only), Linux (AT-SPI,
+   whole desktop), and Windows (UI Automation). On a platform with
+   no provider, or when the provider's dependency is missing, the
+   listing reports `supported=False` with a clear message; an empty
+   list there means "no provider", not "no elements".
 2. Act by name, not by coordinates. Prefer `click_text("Submit")`,
    `fill_field("Email", "x@y.com")`, `click_image("ok.png")`, or
    `click_element(element)`. Use `click_point(x, y)` only when the
@@ -68,19 +75,33 @@ mode while testing a new task.
   `mouse_position`, `elements`, `timestamp`.
 - `list_elements(max_depth=12, max_elements=500, scale=None)`
   returns an `ElementListing`: `elements`, `supported`, `platform`,
-  `message`, `scale`, `app_name`. macOS only in V1.
+  `message`, `scale`, `app_name`. Three providers (macOS, Linux
+  AT-SPI, Windows UI Automation), one shape.
 - `find_element(role=None, title=None, title_contains=None,
   description=None, ...)` returns the first match or None.
   `find_all(...)` returns all matches.
 - `click_element(element, session=None)`.
 - `wait_for_image(image, timeout=10.0, interval=0.5, confidence=None,
-  region=None, screenshot_dir=None)` returns the box.
+  region=None, screenshot_dir=None)` returns the box. Confidence
+  rule: passing `confidence` without OpenCV installed raises
+  `ProviderNotInstalledError("OpenCV", ...)`; without OpenCV only
+  exact matching is available.
 - `wait_for_condition(fn, timeout=10.0, interval=0.5,
   description="condition", screenshot_dir=None)` returns fn()'s
   truthy value.
 - `click_text(text, timeout=10.0, interval=1.0, session=None,
   language="eng", screenshot_dir=None)` returns the (x, y) center.
-- `fill_field(text, value, session=None, timeout=10.0, interval=0.05)`.
+  OCR uses Tesseract psm 11 (sparse text) on a 2x upscaled image,
+  so small labels are found; each OCR pass takes about 2 seconds on
+  a 1920x1080 screen.
+- `fill_field(text, value, session=None, timeout=10.0, interval=0.05,
+  field_gap=30)`. The accessibility path (macOS) clicks the real
+  field element. The OCR path finds the label's box and clicks the
+  FIELD: the point to the right of the label on the same row,
+  `(label_right + field_gap, label_center_y)`, defaulting to 30px;
+  when the label spans nearly the full screen width, it clicks
+  below the label instead, `(label_center_x, label_bottom +
+  field_gap)`. It does NOT click the label itself.
 - `click_image(image, session=None, timeout=10.0, interval=0.5,
   confidence=None, region=None)` returns the (x, y) center.
 - `click_point(x, y, button="left", session=None)`.
@@ -120,8 +141,13 @@ destructive).
   PyAutoGUI limit, not this package's.
 - Image matching is slow (1 to 2 seconds per locate call) and breaks
   on scaling or theme changes. Prefer the element list or OCR text.
-- macOS element listing and OCR clicking are implemented from API
-  specifications and are UNVERIFIED on a real Mac. Verify with
+  Without OpenCV, `confidence` is not available (see the confidence
+  rule above); install `opencv-python` for fuzzy matching.
+- Linux AT-SPI element listing is verified live under Xvfb with a
+  GTK dialog, and OCR clicking plus `fill_field` are verified live
+  on this VM (9 of 9 live checks pass). See TESTING.md.
+- macOS element listing and Windows UI Automation are implemented
+  from API specifications and are UNVERIFIED. Verify macOS with
   `scripts/mac_live_test.py` on the owner's Mac before relying on
-  them. Waits, errors, safety, dry-run, the action log, and the
+  it. Waits, errors, safety, dry-run, the action log, and the
   observe() structure are unit tested with mocks and need no display.

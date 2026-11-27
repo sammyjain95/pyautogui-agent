@@ -106,15 +106,32 @@ def fake_ocr(monkeypatch):
 
     Returns a holder dict; tests replace ``holder["data"]`` to change
     what OCR sees. Default data: the word "Submit" at (100, 200).
+    The holder also records the ``config`` string and the image size
+    of the last call. The package upscales the screenshot 2x before
+    OCR, so the image here is 2x the screen and the coordinates
+    Tesseract returns are in the upscaled space; the stub simulates
+    that by doubling the canned screen coordinates, and the package
+    divides them back by 2.
     """
-    holder = {"data": ocr_data([("Submit", 100, 200, 60, 20, 95.0)])}
+    holder = {"data": ocr_data([("Submit", 100, 200, 60, 20, 95.0)]),
+              "config": None, "image_size": None}
     module = types.ModuleType("pytesseract")
 
     class Output:
         DICT = "dict"
 
     module.Output = Output
-    module.image_to_data = lambda image, lang="eng", output_type=None: holder["data"]
+
+    def image_to_data(image, lang="eng", output_type=None, config=None):
+        holder["config"] = config
+        holder["image_size"] = image.size
+        data = holder["data"]
+        doubled = dict(data)
+        for key in ("left", "top", "width", "height"):
+            doubled[key] = [value * 2 for value in data[key]]
+        return doubled
+
+    module.image_to_data = image_to_data
     monkeypatch.setitem(sys.modules, "pytesseract", module)
     monkeypatch.setattr(
         shutil, "which",

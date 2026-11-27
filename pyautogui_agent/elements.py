@@ -28,8 +28,6 @@ from .errors import NotSupportedError
 from .safety import get_default_session
 from ._util import get_pyautogui
 
-_MACOS = sys.platform == "darwin"
-
 # Attribute failures are skipped, not fatal: many elements do not
 # expose every attribute, and a single unreadable element must not
 # break the whole walk.
@@ -51,6 +49,7 @@ class Element:
     size: tuple
     enabled: bool = True
     value: str | None = None
+    visible: bool = True
     center: tuple = field(init=False)
 
     def __post_init__(self):
@@ -64,8 +63,9 @@ class ElementListing:
     """The result of list_elements().
 
     ``supported`` is False on platforms without an element provider
-    yet (everything except macOS in V1). Callers must check it; the
-    list is never silently empty on an unsupported platform.
+    yet, or when the provider for the platform is not installed.
+    Callers must check it; the list is never silently empty on an
+    unsupported platform.
     """
 
     elements: list
@@ -81,20 +81,47 @@ def _unsupported_listing(message):
                           platform=sys.platform, message=message)
 
 
-def list_elements(max_depth=12, max_elements=500, scale=None):
-    """List the UI elements of the focused application.
+def _dispatch(platform):
+    """Return the element provider function for a platform string.
 
-    Returns an ElementListing. On macOS this walks the accessibility
-    tree of the focused application, depth- and count-limited. On any
-    other platform it returns a listing with ``supported`` False and a
-    message saying so, never a silent empty list.
+    Returns None when no provider exists for the platform. The
+    providers are imported lazily so importing this module never
+    pulls in pyobjc, pyatspi, or comtypes. Tests call this directly
+    with a platform string to check dispatch without changing the
+    real platform.
     """
-    if not _MACOS:
+    if platform == "darwin":
+        return _list_elements_macos
+    if platform == "linux":
+        from .elements_linux import list_elements_linux
+        return list_elements_linux
+    if platform == "win32":
+        from .elements_windows import list_elements_windows
+        return list_elements_windows
+    return None
+
+
+def list_elements(max_depth=12, max_elements=500, scale=None):
+    """List the UI elements of the focused application (macOS) or of
+    the desktop (Linux, Windows).
+
+    Returns an ElementListing. The provider depends on the platform:
+    macOS walks the accessibility tree of the focused application,
+    Linux walks the AT-SPI desktop tree (all applications), and
+    Windows walks the UI Automation tree from the desktop root. All
+    three are depth- and count-limited and return the same
+    ElementListing and Element shape. On a platform with no provider,
+    or when the provider is not installed, the listing has
+    ``supported`` False and a message saying so, never a silent
+    empty list.
+    """
+    provider = _dispatch(sys.platform)
+    if provider is None:
         return _unsupported_listing(
-            "Element listing is not supported on %s yet. "
-            "macOS only in V1." % (sys.platform,))
-    return _list_elements_macos(max_depth=max_depth,
-                                max_elements=max_elements, scale=scale)
+            "Element listing is not supported on %s yet."
+            % (sys.platform,))
+    return provider(max_depth=max_depth, max_elements=max_elements,
+                    scale=scale)
 
 
 def _list_elements_macos(max_depth, max_elements, scale):

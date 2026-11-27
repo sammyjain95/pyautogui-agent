@@ -32,6 +32,28 @@ def get_pyautogui():
     return pyautogui
 
 
+def opencv_available():
+    """Return True when OpenCV is available for confidence matching.
+
+    Checks PyScreeze's own flag first (it sets ``_useOpenCV`` at
+    import time from whether cv2 imports), and falls back to trying
+    to import cv2 directly. Importing cv2 is safe headless; it does
+    not touch the display.
+    """
+    try:
+        import pyscreeze
+        flag = getattr(pyscreeze, "_useOpenCV", None)
+        if flag is not None:
+            return bool(flag)
+    except Exception:
+        pass
+    try:
+        import cv2  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def save_screenshot(image, directory=None):
     """Save a Pillow image to disk and return the path.
 

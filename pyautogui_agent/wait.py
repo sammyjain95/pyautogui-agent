@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import time
 
-from .errors import ActionTimeoutError
-from ._util import get_pyautogui, save_screenshot
+from .errors import ActionTimeoutError, ProviderNotInstalledError
+from ._util import get_pyautogui, opencv_available, save_screenshot
+
+_OPENCV_INSTALL_HINT = (
+    "Confidence matching needs OpenCV. Install it with: "
+    "pip install opencv-python. Without OpenCV only exact pixel "
+    "matching is available (leave confidence unset)."
+)
 
 
 def _last_screenshot(pg, screenshot_dir):
@@ -36,7 +42,15 @@ def wait_for_image(image, timeout=10.0, interval=0.5, confidence=None,
     ``ActionTimeoutError`` carrying the last screenshot path.
     ``confidence`` and ``region`` are passed through to locateOnScreen
     when given.
+
+    ``confidence`` needs OpenCV. When it is given and OpenCV is not
+    installed, this raises ``ProviderNotInstalledError`` with install
+    instructions instead of letting PyScreeze's raw
+    ``NotImplementedError`` escape. Leave ``confidence`` unset for
+    exact pixel matching, which works without OpenCV.
     """
+    if confidence is not None and not opencv_available():
+        raise ProviderNotInstalledError("OpenCV", _OPENCV_INSTALL_HINT)
     pg = get_pyautogui()
     not_found = getattr(pg, "ImageNotFoundException", None)
     deadline = time.monotonic() + timeout
@@ -48,6 +62,12 @@ def wait_for_image(image, timeout=10.0, interval=0.5, confidence=None,
             if region is not None:
                 kwargs["region"] = region
             found = pg.locateOnScreen(image, **kwargs)
+        except NotImplementedError as exc:
+            # PyScreeze raises this when confidence is used without
+            # OpenCV (for example when the availability check above
+            # was bypassed). Surface it as a clear install error.
+            raise ProviderNotInstalledError(
+                "OpenCV", _OPENCV_INSTALL_HINT) from exc
         except Exception as exc:
             if not_found is not None and isinstance(exc, not_found):
                 found = None

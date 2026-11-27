@@ -24,13 +24,14 @@ def main() -> None:
 
     frame = tk.Frame(root, bg="white")
     frame.pack(pady=20)
-    name_label = tk.Label(frame, text="Name:", font=("Helvetica", 16),
-                          bg="white")
-    name_label.pack(side=tk.LEFT)
+    tk.Label(frame, text="Name:", font=("Helvetica", 16),
+             bg="white").pack(side=tk.LEFT)
     entry = tk.Entry(frame, font=("Helvetica", 16), width=24)
     entry.pack(side=tk.LEFT, padx=10)
-    # Like a well-behaved native app, clicking the label focuses the field.
-    name_label.bind("<Button-1>", lambda e: entry.focus_set())
+    # NOTE: clicking the label does NOT focus the entry here, on
+    # purpose. fill_field must click the field itself (to the right of
+    # the label), not the label; the old label-click binding that made
+    # the pre-0.2.0 fill_field work has been removed.
 
     def on_submit() -> None:
         status.config(text="Status: clicked")

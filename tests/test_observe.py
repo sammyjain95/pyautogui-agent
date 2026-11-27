@@ -13,12 +13,13 @@ def test_observe_returns_full_observation(fake_pyautogui):
     assert obs.screenshot.size == (800, 600)
     assert obs.screen_size == (1920, 1080)
     assert obs.mouse_position == (100, 200)
-    # On this Linux VM there is no element provider, so the listing is
+    # On this Linux VM there is no AT-SPI bus, so the listing is
     # included with supported False, never omitted or silently empty.
     assert obs.elements is not None
     assert obs.elements.supported is False
     assert obs.elements.elements == []
-    assert "linux" in obs.elements.message
+    assert obs.elements.platform == "linux"
+    assert "AT-SPI" in obs.elements.message
     assert obs.timestamp is not None
 
 

@@ -20,10 +20,14 @@ from pyautogui_agent.safety import Session
 from tests.conftest import ocr_data
 
 
-def test_click_text_without_tesseract_raises_clear_error():
-    # No pytesseract stub is installed for this test, and this VM has
-    # no tesseract binary, so the install message must be raised.
-    assert "pytesseract" not in sys.modules
+def test_click_text_without_tesseract_raises_clear_error(monkeypatch):
+    # Force the missing-Tesseract condition regardless of this VM
+    # (Tesseract may or may not be installed here): block the
+    # pytesseract import and hide the binary, then the install
+    # message must be raised.
+    import shutil
+    monkeypatch.setitem(sys.modules, "pytesseract", None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(ProviderNotInstalledError) as excinfo:
         click_text("Submit", timeout=0.2, interval=0.05)
     assert "tesseract" in str(excinfo.value).lower()
@@ -39,6 +43,20 @@ def test_click_text_clicks_word_center(fake_pyautogui, fake_ocr):
     assert clicks == [("click", 130.0, 210.0, "left")]
     assert session.log[0].action == "click_text"
     assert session.log[0].executed is True
+
+
+def test_ocr_uses_sparse_text_and_upscale(fake_pyautogui, fake_ocr):
+    # OCR must use psm 11 (sparse text) on a 2x upscaled image, and
+    # the coordinates it returns must be scaled back to screen
+    # pixels: the fake returns the canned word doubled (as Tesseract
+    # would for a 2x image), so the click must still land at the
+    # screen center (130, 210), and the image passed to OCR must be
+    # 1600x1200 for an 800x600 screenshot.
+    result = click_text("Submit", timeout=5.0)
+    assert result == (130.0, 210.0)
+    assert fake_ocr["config"] is not None
+    assert "--psm 11" in fake_ocr["config"]
+    assert fake_ocr["image_size"] == (1600, 1200)
 
 
 def test_click_text_matches_multiword_phrase(fake_pyautogui, fake_ocr):
@@ -103,15 +121,46 @@ def test_click_point_dry_run_logs_without_clicking(fake_pyautogui):
     assert session.log[0].executed is False
 
 
-def test_fill_field_clicks_label_then_types(fake_pyautogui, fake_ocr):
+def test_fill_field_clicks_field_right_of_label_then_types(
+        fake_pyautogui, fake_ocr):
     session = Session()
     fill_field("Submit", "hello", session=session)
+    # The "Submit" word is at (100, 200, 60, 20). The field point is
+    # 30px past its right edge, at its vertical center: (190, 210).
+    # The label itself is never clicked.
     kinds = [c[0] for c in fake_pyautogui.calls]
     assert kinds.index("click") < kinds.index("typewrite")
+    clicks = [c for c in fake_pyautogui.calls if c[0] == "click"]
+    assert clicks == [("click", 190.0, 210.0, "left")]
     typed = [c for c in fake_pyautogui.calls if c[0] == "typewrite"]
     assert typed == [("typewrite", "hello", 0.05)]
     actions = [r.action for r in session.log]
-    assert actions == ["click_text", "type"]
+    assert actions == ["click_field", "type"]
+    assert session.log[0].args["placement"] == "right"
+
+
+def test_field_point_right_of_label():
+    from pyautogui_agent.actions import _field_point
+    point, placement = _field_point((100, 200, 60, 20), (1920, 1080))
+    assert point == (190.0, 210.0)
+    assert placement == "right"
+
+
+def test_field_point_below_full_width_label():
+    from pyautogui_agent.actions import _field_point
+    # Label spans nearly the full width: no room for a field to its
+    # right, so the point falls below it.
+    point, placement = _field_point((100, 200, 1800, 20), (1920, 1080))
+    assert point == (1000.0, 250.0)
+    assert placement == "below"
+
+
+def test_field_point_custom_gap():
+    from pyautogui_agent.actions import _field_point
+    point, placement = _field_point((100, 200, 60, 20), (1920, 1080),
+                                    field_gap=10)
+    assert point == (170.0, 210.0)
+    assert placement == "right"
 
 
 def test_fill_field_missing_label_raises(fake_pyautogui, fake_ocr, tmp_path):

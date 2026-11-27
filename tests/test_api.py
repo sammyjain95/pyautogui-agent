@@ -12,7 +12,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def test_all_public_names_are_accessible():
     for name in pyautogui_agent.__all__:
         assert hasattr(pyautogui_agent, name), name
-    assert pyautogui_agent.__version__ == "0.1.0"
+    assert pyautogui_agent.__version__ == "0.2.0"
 
 
 def test_lazy_import_of_pyautogui():

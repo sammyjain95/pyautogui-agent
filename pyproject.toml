@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyautogui-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Agent-friendly companion layer on top of PyAutoGUI: structured screen elements, waits, task-level actions, and a safety layer."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,6 +24,7 @@ macos = [
     "pyobjc-framework-ApplicationServices>=9.0",
     "pyobjc-framework-AppKit>=9.0",
 ]
+windows = ["comtypes>=1.2.0"]
 dev = ["pytest>=7.0"]
 
 [project.urls]

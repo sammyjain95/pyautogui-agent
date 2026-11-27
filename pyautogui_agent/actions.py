@@ -54,9 +54,24 @@ def _ocr_words(ocr, image, language):
     """Run OCR and return a list of word dicts with boxes and confidence.
 
     Words with no text or a negative confidence (pytesseract marks
-    non-word entries with -1) are dropped.
+    non-word entries with -1) are dropped. Two choices matter for
+    UI text and were found by live testing (see TESTING.md):
+
+    - ``--psm 11`` (sparse text): the default page segmentation
+      (psm 3) missed small labels such as a 16pt "Name:" next to an
+      entry field, while psm 11, which looks for scattered text,
+      found it.
+    - a 2x upscale before OCR: at 1x, psm 11 read the label as
+      "Name" (the colon was dropped); at 2x it read "Name:".
+      Coordinates from the upscaled image are divided back by the
+      scale so boxes are in screen pixels.
     """
-    data = ocr.image_to_data(image, lang=language,
+    from PIL import Image as _Image
+
+    scale = 2
+    big = image.resize((image.width * scale, image.height * scale),
+                       _Image.LANCZOS)
+    data = ocr.image_to_data(big, lang=language, config="--psm 11",
                              output_type=ocr.Output.DICT)
     words = []
     count = len(data.get("text", []))
@@ -70,10 +85,10 @@ def _ocr_words(ocr, image, language):
             continue
         words.append({
             "text": text,
-            "left": int(data["left"][i]),
-            "top": int(data["top"][i]),
-            "width": int(data["width"][i]),
-            "height": int(data["height"][i]),
+            "left": int(data["left"][i]) // scale,
+            "top": int(data["top"][i]) // scale,
+            "width": int(data["width"][i]) // scale,
+            "height": int(data["height"][i]) // scale,
             "conf": conf,
         })
     return words
@@ -135,17 +150,17 @@ def _closest_word(words, phrase):
     return best_word, best_ratio
 
 
-def click_text(text, timeout=10.0, interval=1.0, session=None,
-               language="eng", screenshot_dir=None):
-    """Find text on screen with OCR and click its center.
+def _find_text(text, timeout=10.0, interval=1.0, language="eng",
+               screenshot_dir=None):
+    """Find text on screen with OCR and return its match dict.
 
     Retries with fresh screenshots until the timeout expires. Returns
-    the (x, y) center clicked, or None in dry-run mode. Raises
-    ElementNotFoundError carrying the last screenshot path and the
-    closest OCR word when the text never appears, and
-    ProviderNotInstalledError when Tesseract is absent.
+    a dict with center (x, y), box (left, top, width, height), and
+    confidence (0.0 to 1.0). Raises ElementNotFoundError carrying the
+    last screenshot path and the closest OCR word when the text never
+    appears, and ProviderNotInstalledError when Tesseract is absent.
+    Shared by click_text and fill_field so both see the same match.
     """
-    session = session or get_default_session()
     pg = get_pyautogui()
     ocr = _get_ocr()
     deadline = time.monotonic() + timeout
@@ -157,13 +172,7 @@ def click_text(text, timeout=10.0, interval=1.0, session=None,
         words = _ocr_words(ocr, image, language)
         match = _find_text_match(words, text)
         if match is not None:
-            x, y = match["center"]
-            session.execute(
-                "click_text",
-                {"text": text, "x": x, "y": y},
-                lambda: pg.click(x, y),
-                result_summary="clicked (%s, %s)" % (x, y))
-            return (x, y) if not session.dry_run else None
+            return match
         closest = _closest_word(words, text)
         if time.monotonic() >= deadline:
             path = None
@@ -177,6 +186,57 @@ def click_text(text, timeout=10.0, interval=1.0, session=None,
                 text, screenshot_path=path,
                 closest_match=closest[0], confidence=closest[1])
         time.sleep(interval)
+
+
+def _field_point(box, screen_size, field_gap=30):
+    """Return the point to click to focus the field for a label.
+
+    The label's box is (left, top, width, height) and screen_size is
+    (width, height). The field usually sits to the right of its label
+    on the same row, so the point is just past the label's right edge,
+    ``field_gap`` pixels over, at the label's vertical center.
+
+    When the label spans nearly the full screen width there is no
+    room for a field to its right (less than ``field_gap`` plus 20
+    pixels of field to click into), so the point falls back to below
+    the label: the label's horizontal center, ``field_gap`` pixels
+    under its bottom edge. This happens with full-width headings and
+    with labels stacked above their field.
+
+    Returns ((x, y), placement) where placement is "right" or "below".
+    """
+    left, top, width, height = box
+    screen_width, _screen_height = screen_size
+    label_right = left + width
+    label_center_y = top + height / 2.0
+    label_center_x = left + width / 2.0
+    label_bottom = top + height
+    if label_right + field_gap + 20 <= screen_width:
+        return (label_right + field_gap, label_center_y), "right"
+    return (label_center_x, label_bottom + field_gap), "below"
+
+
+def click_text(text, timeout=10.0, interval=1.0, session=None,
+               language="eng", screenshot_dir=None):
+    """Find text on screen with OCR and click its center.
+
+    Retries with fresh screenshots until the timeout expires. Returns
+    the (x, y) center clicked, or None in dry-run mode. Raises
+    ElementNotFoundError carrying the last screenshot path and the
+    closest OCR word when the text never appears, and
+    ProviderNotInstalledError when Tesseract is absent.
+    """
+    session = session or get_default_session()
+    pg = get_pyautogui()
+    match = _find_text(text, timeout=timeout, interval=interval,
+                       language=language, screenshot_dir=screenshot_dir)
+    x, y = match["center"]
+    session.execute(
+        "click_text",
+        {"text": text, "x": x, "y": y},
+        lambda: pg.click(x, y),
+        result_summary="clicked (%s, %s)" % (x, y))
+    return (x, y) if not session.dry_run else None
 
 
 def click_image(image, session=None, timeout=10.0, interval=0.5,
@@ -217,12 +277,24 @@ def click_point(x, y, button="left", session=None):
         result_summary="clicked (%s, %s)" % (x, y))
 
 
-def fill_field(text, value, session=None, timeout=10.0, interval=0.05):
+def fill_field(text, value, session=None, timeout=10.0, interval=0.05,
+               field_gap=30, language="eng", screenshot_dir=None):
     """Click a field by its label, then type a value into it.
 
     The label is matched first against the accessibility element list
-    (macOS), then by OCR text. Raises ElementNotFoundError when the
-    label cannot be found either way.
+    (macOS), which returns the real field element, then by OCR text.
+    Raises ElementNotFoundError when the label cannot be found either
+    way.
+
+    On the OCR path the label itself is not clicked: clicking a label
+    does not focus the field in most apps. Instead the click lands on
+    the field, which usually sits to the right of its label on the
+    same row. The point is ``field_gap`` pixels (default 30) past the
+    label's right edge, at the label's vertical center. When the label
+    spans nearly the full screen width, so there is no room for a
+    field to its right, the click falls back to below the label: the
+    label's horizontal center, ``field_gap`` pixels under its bottom
+    edge. See ``_field_point`` for the exact rule.
     """
     session = session or get_default_session()
     pg = get_pyautogui()
@@ -236,7 +308,17 @@ def fill_field(text, value, session=None, timeout=10.0, interval=0.05):
         click_element(element, session=session)
         clicked = True
     if not clicked:
-        click_text(text, timeout=timeout, session=session)
+        match = _find_text(text, timeout=timeout, interval=1.0,
+                           language=language,
+                           screenshot_dir=screenshot_dir)
+        (x, y), placement = _field_point(match["box"], pg.size(),
+                                         field_gap=field_gap)
+        session.execute(
+            "click_field",
+            {"label": text, "x": x, "y": y, "placement": placement},
+            lambda: pg.click(x, y),
+            result_summary="clicked field %s of %r (%s, %s)"
+                           % (placement, text, x, y))
     session.execute(
         "type",
         {"text": value},

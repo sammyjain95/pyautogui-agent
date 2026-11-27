@@ -29,12 +29,17 @@ def test_element_listing_defaults():
 
 
 def test_list_elements_on_linux_is_explicit_not_silent():
+    # On Linux the AT-SPI provider runs. With no AT-SPI bus (headless
+    # test runs) it returns supported=False with a message naming
+    # AT-SPI; with a bus it returns supported=True. Either way the
+    # result is explicit, never a silent empty list.
     listing = list_elements()
-    assert listing.supported is False
-    assert listing.elements == []
-    assert listing.platform == sys.platform
-    assert "not supported" in listing.message.lower()
-    assert sys.platform in listing.message
+    if listing.supported:
+        assert isinstance(listing.elements, list)
+    else:
+        assert listing.elements == []
+        assert ("AT-SPI" in listing.message
+                or "pyatspi" in listing.message)
 
 
 def test_find_element_raises_not_supported_on_linux():
