@@ -1,0 +1,134 @@
+# pyautogui-agent
+
+Agent-friendly companion layer on top of PyAutoGUI. PyAutoGUI only
+understands pixels; this package adds structured screen elements,
+one-call observation, waits with deadlines, task-level actions, and a
+safety layer. It never modifies PyAutoGUI or PyScreeze. It only calls
+them.
+
+Install: pip install pyautogui-agent
+OCR (optional): pip install "pyautogui-agent[ocr]" plus the Tesseract binary
+macOS element listing (optional): pip install "pyautogui-agent[macos]"
+
+Import: import pyautogui_agent
+All public names are available from pyautogui_agent directly, for
+example: from pyautogui_agent import observe, click_text, Session.
+
+## Observation
+
+- observe(include_elements=True, take_screenshot=True, scale=None)
+  Returns Observation with fields: screenshot (Pillow image or None),
+  screen_size (width, height), mouse_position (x, y), elements
+  (ElementListing or None), timestamp. On platforms without an element
+  provider the listing is included with supported=False, never omitted.
+
+## Elements (macOS only in V1)
+
+- list_elements(max_depth=12, max_elements=500, scale=None)
+  Returns ElementListing with fields: elements (list of Element),
+  supported (bool), platform, message, scale (backing factor used),
+  app_name (focused application). On non-macOS platforms returns
+  supported=False with a message, never a silent empty list.
+- Element fields: role (for example "AXButton"), title, description,
+  position (x, y) in PyAutoGUI pixel coordinates, size (width,
+  height), center (x, y), enabled (bool), value.
+  Coordinates are Accessibility points scaled by the display backing
+  scale factor (Retina: 2.0). Pass scale= to override.
+- find_element(role=None, title=None, title_contains=None,
+  description=None, max_depth=12, max_elements=500, scale=None)
+  Returns the first matching Element or None. Raises
+  NotSupportedError on platforms without an element provider.
+- find_all(...) same filters, returns a list (possibly empty).
+- click_element(element, session=None) clicks the element center
+  through the safety layer.
+
+## Waits
+
+- wait_for_image(image, timeout=10.0, interval=0.5, confidence=None,
+  region=None, screenshot_dir=None)
+  Returns the box (left, top, width, height) when the image appears.
+  Raises ActionTimeoutError carrying last_screenshot (path) and waited.
+- wait_for_condition(fn, timeout=10.0, interval=0.5,
+  description="condition", screenshot_dir=None)
+  Returns the truthy value fn() returns. Raises ActionTimeoutError
+  carrying last_screenshot on timeout.
+
+## Actions (all go through a safety Session)
+
+- click_text(text, timeout=10.0, interval=1.0, session=None,
+  language="eng", screenshot_dir=None)
+  Finds text on screen with OCR and clicks its center. Returns the
+  (x, y) center, or None in dry-run mode. Raises
+  ElementNotFoundError (query, screenshot_path, closest_match,
+  confidence) when the text never appears, and
+  ProviderNotInstalledError when Tesseract is absent.
+- fill_field(text, value, session=None, timeout=10.0, interval=0.05)
+  Clicks a field by its label (accessibility element first, then OCR
+  text) and types the value. Raises ElementNotFoundError when the
+  label cannot be found.
+- click_image(image, session=None, timeout=10.0, interval=0.5,
+  confidence=None, region=None)
+  Waits for an image, then clicks its center. Returns (x, y) or None
+  in dry-run mode. Raises ActionTimeoutError when the image never
+  appears.
+- click_point(x, y, button="left", session=None)
+  Clicks a point through the safety layer. Prefer click_text,
+  click_image, or click_element when the target can be named.
+
+## Safety
+
+- Session(dry_run=False, confirm_hook=None, confirm_predicate=None)
+  dry_run=True logs actions without executing them.
+  confirm_hook is a callable taking an ActionRecord and returning True
+  to allow or False to decline an action. confirm_predicate selects
+  which actions need confirmation; when None and a hook is set, the
+  hook is consulted for every action. A declined action raises
+  ActionDeclinedError and is not executed.
+- Session.execute(action, args, fn, result_summary=None) runs fn
+  under the session rules and logs it. Returns fn() result, or None
+  in dry-run mode.
+- Session.dry_run_mode() context manager: temporarily enable dry-run.
+- dry_run() context manager: same, on the default session.
+- get_default_session() / set_default_session(session).
+- Session.log is a list of ActionRecord with fields: timestamp,
+  action, args, result, executed, declined.
+- Session.format_log() returns printable lines. Session.last_action()
+  returns the most recent record or None.
+
+## Errors (all derive from AgentError)
+
+- ElementNotFoundError: query, screenshot_path, closest_match,
+  confidence.
+- ActionTimeoutError: what, timeout, waited, last_screenshot.
+- ProviderNotInstalledError: provider, install_hint.
+- NotSupportedError: feature, platform, detail.
+- ActionDeclinedError: action, action_args.
+- DisplayUnavailableError: raised when PyAutoGUI cannot connect to a
+  display (headless machine). Importing this package never raises it;
+  only actions that need the screen do.
+
+## Rules for agents using this package
+
+- Never call raw pyautogui functions when a task-level action exists.
+  Prefer click_text, fill_field, click_image, click_element.
+- Always pass a Session. Use Session(dry_run=True) while testing a
+  new task, and keep the confirmation hook on for destructive actions.
+- Always check obs.elements.supported before trusting an empty
+  element list. An empty list on an unsupported platform means "no
+  provider", not "no elements".
+- On ElementNotFoundError or ActionTimeoutError, read screenshot_path
+  and look at the screenshot before retrying. The screenshot shows
+  what the screen actually looked like.
+- Coordinates are top-left origin, X right, Y down, primary display
+  only (a PyAutoGUI limit). Never hardcode coordinates from another
+  machine; use observe() or the element list.
+- locate-based calls are slow (1 to 2 seconds each). Do not poll in a
+  loop; use wait_for_image or wait_for_condition.
+
+## Verification status
+
+- Waits, errors, safety, dry-run, action log, and observe() structure
+  are unit tested with mocks, no display needed.
+- macOS element listing and OCR clicking are implemented from API
+  specifications and are UNVERIFIED on a real Mac. Verify with
+  scripts/mac_live_test.py on the owner's Mac before relying on them.
